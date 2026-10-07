@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bhashasense_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - MOCK_ML_MODELS=true
+      - DEVICE=cpu
+      - CORS_ORIGINS=["http://localhost:5173", "http://127.0.0.1:5173", "http://frontend:5173"]
+    volumes:
+      - ./backend:/app
+      - backend_uploads:/app/storage/uploads
+      - model_cache:/app/models_cache
+    networks:
+      - bhashasense_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bhashasense_frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    networks:
+      - bhashasense_net
+
+volumes:
+  backend_uploads:
+  model_cache:
+
+networks:
+  bhashasense_net:
+    driver: bridge
