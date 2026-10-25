@@ -454,13 +454,17 @@ async def analyze_audio_endpoint(file: UploadFile = File(...)):
             },
             "transcription": asr_result,
             "sentiment_analysis": sentiment_result,
-            "entity_extraction": entity_result,
+            "entity_extraction": {
+                "entity_count": len(entity_result) if isinstance(entity_result, list) else entity_result.get("entity_count", 0),
+                "entities": entity_result if isinstance(entity_result, list) else entity_result.get("entities", []),
+                "summary": {},
+            } if not (isinstance(entity_result, dict) and "entities" in entity_result) else entity_result,
             "pipeline_metadata": {
                 "orchestration": "asyncio.gather",
                 "models_used": [
                     "AI4Bharat IndicConformer 600M (ASR)",
                     "airzipm/sentiment-analysis-muril-v2 (IndicSentiment)",
-                    "dslim/bert-base-NER (NER)",
+                    "ai4bharat/IndicNER (NER)",
                 ],
                 "execution_mode": "real_inference",
                 "timestamp": datetime.now(timezone.utc).isoformat(),

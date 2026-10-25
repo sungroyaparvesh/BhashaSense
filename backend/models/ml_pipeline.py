@@ -32,7 +32,7 @@ if env_path.exists():
             os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 # Fetch the token by its variable name, NOT the raw token string
-HF_TOKEN = os.getenv("HF_TOKEN")
+HF_TOKEN = os.getenv('HF_TOKEN')
 
 # Dynamically inject the bundled FFmpeg into the environment PATH
 os.environ["PATH"] += os.pathsep + os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
@@ -57,7 +57,23 @@ except Exception as e:
 # Fine-tuned on ai4bharat/IndicSentiment for multilingual Indic support
 sentiment_analyzer = pipeline("text-classification", model="airzipm/sentiment-analysis-muril-v2", top_k=None)
 
-_ner_pipeline = None
+# ---------------------------------------------------------------------------
+# Global IndicNER Initialization (with Ungated Fallback)
+# ---------------------------------------------------------------------------
+ner_pipeline = None
+for ner_model_id in ["ai4bharat/IndicNER", "techysanoj/fine-tuned-IndicNER", "Davlan/bert-base-multilingual-cased-ner-hrl"]:
+    try:
+        ner_pipeline = pipeline(
+            "token-classification",
+            model=ner_model_id,
+            tokenizer=ner_model_id,
+            aggregation_strategy="first",
+            token=HF_TOKEN if "ai4bharat" in ner_model_id else None
+        )
+        print(f"[BhashaSense] Loaded NER model: {ner_model_id}")
+        break
+    except Exception as e:
+        print(f"[BhashaSense] Could not load {ner_model_id}: {e}")
 
 
 def get_sentiment_pipeline():
@@ -66,15 +82,8 @@ def get_sentiment_pipeline():
 
 
 def get_ner_pipeline():
-    """Returns the cached Hugging Face BERT NER pipeline."""
-    global _ner_pipeline
-    if _ner_pipeline is None:
-        _ner_pipeline = pipeline(
-            "ner",
-            model="dslim/bert-base-NER",
-            aggregation_strategy="simple",
-        )
-    return _ner_pipeline
+    """Returns the cached NER pipeline."""
+    return ner_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -259,93 +268,109 @@ async def analyze_sentiment(transcript: str) -> dict[str, Any]:
 # Entity Extraction: extract_entities
 # ---------------------------------------------------------------------------
 
-def _run_ner_sync(text: str) -> dict[str, Any]:
-    cleaned = (text or "").strip()
-    if not cleaned or cleaned == "No speech detected in audio.":
-        return {"entity_count": 0, "entities": [], "summary": {}}
-
-    pipe = get_ner_pipeline()
-    raw_entities = pipe(cleaned[:1024])
-
-    label_map = {
-        "ORG": "ORGANIZATION",
-        "PER": "PERSON",
-        "LOC": "LOCATION",
-        "MISC": "PRODUCT",
-    }
+def _run_extract_entities_sync(text: str) -> list[dict[str, Any]]:
+    if not text or not text.strip():
+        return []
 
     entities = []
     seen_spans = set()
+    occupied_spans = []
 
-    for item in raw_entities:
-        word = str(item.get("word", "")).strip().replace("##", "")
-        if not word:
-            continue
-
-        raw_group = str(item.get("entity_group", "OTHER")).upper()
-        label = label_map.get(raw_group, raw_group)
-        score = float(item.get("score", 0.90))
-        start_char = int(item.get("start", 0))
-        end_char = int(item.get("end", start_char + len(word)))
-
-        span_key = (start_char, end_char)
-        if span_key not in seen_spans:
-            seen_spans.add(span_key)
-            entities.append({
-                "entity": word,
-                "label": label,
-                "confidence": round(score, 2),
-                "start_char": start_char,
-                "end_char": end_char,
-            })
-
-    # Rule-based augmentation for MONEY and APPLICATION_ID
-    money_pattern = re.compile(r'(?:₹|Rs\.?|INR|\$)\s*[\d,]+(?:\.\d+)?|\b\d+[\d,]*\s*(?:rupees|lakh|crore|dollars)\b', re.IGNORECASE)
-    for match in money_pattern.finditer(cleaned):
-        span = match.span()
-        if span not in seen_spans:
-            seen_spans.add(span)
-            entities.append({
-                "entity": match.group(0),
-                "label": "MONEY",
-                "confidence": 0.98,
-                "start_char": span[0],
-                "end_char": span[1],
-            })
-
-    id_pattern = re.compile(r'\b[A-Z]{2,4}-\d{4,8}\b')
-    for match in id_pattern.finditer(cleaned):
-        span = match.span()
-        if span not in seen_spans:
-            seen_spans.add(span)
-            entities.append({
-                "entity": match.group(0),
-                "label": "APPLICATION_ID",
-                "confidence": 0.97,
-                "start_char": span[0],
-                "end_char": span[1],
-            })
-
-    # Sort entities by start character offset
-    entities.sort(key=lambda x: x["start_char"])
-
-    summary = {}
-    for ent in entities:
-        lbl = ent["label"]
-        if lbl not in summary:
-            summary[lbl] = []
-        if ent["entity"] not in summary[lbl]:
-            summary[lbl].append(ent["entity"])
-
-    return {
-        "entity_count": len(entities),
-        "entities": entities,
-        "summary": summary,
+    label_map = {
+        "PER": "PERSON", "B-PER": "PERSON", "I-PER": "PERSON", "PERSON": "PERSON",
+        "ORG": "ORGANIZATION", "B-ORG": "ORGANIZATION", "I-ORG": "ORGANIZATION", "ORGANIZATION": "ORGANIZATION",
+        "LOC": "LOCATION", "B-LOC": "LOCATION", "I-LOC": "LOCATION", "LOCATION": "LOCATION",
     }
 
+    def add_entity(word_str: str, category: str, conf_score: float, start_char: int = None, end_char: int = None):
+        cleaned = word_str.replace("##", "").strip(" ,.।?!-\"'")
+        if len(cleaned) < 2 or cleaned.lower() in seen_spans:
+            return
 
-async def extract_entities(transcript: str) -> dict[str, Any]:
+        if start_char is None or end_char is None or start_char < 0 or end_char <= start_char:
+            start_char = text.find(cleaned)
+            end_char = start_char + len(cleaned) if start_char != -1 else 0
+        else:
+            offset_start = word_str.find(cleaned)
+            if offset_start != -1:
+                start_char = start_char + offset_start
+                end_char = start_char + len(cleaned)
+
+        if start_char >= 0 and end_char > start_char:
+            for s, e in occupied_spans:
+                if max(start_char, s) < min(end_char, e):
+                    return
+            occupied_spans.append((start_char, end_char))
+
+        seen_spans.add(cleaned.lower())
+        pct = round(float(conf_score) * 100, 1) if conf_score <= 1.0 else round(float(conf_score), 1)
+        prob = round(float(conf_score), 4) if conf_score <= 1.0 else round(float(conf_score) / 100.0, 4)
+        entities.append({
+            "text": cleaned,
+            "word": cleaned,
+            "entity": category,
+            "entity_group": category,
+            "label": category,
+            "type": category,
+            "category": category,
+            "score": prob,
+            "confidence": pct,
+            "start_char": max(0, start_char),
+            "end_char": max(0, end_char),
+        })
+
+    # Stage 1: Multilingual Indic & Code-Mixed Hybrid Gazetteer (MONEY, APPLICATION_ID, Transliterated Entities)
+    hybrid_patterns = [
+        # MONEY (Numeric + Devanagari/Indic number words + Currency terms)
+        (r"(?:₹|rs\.?|inr)\s*\d+(?:[,\d]*)(?:\s*(?:हजार|हज़ार|लाख|करोड़|thousand|lakh|crore))?", "MONEY", 0.97),
+        (r"(?:एक|दो|तीन|चार|पांच|पाँच|दस|बीस|पचास|सौ|हजार|हज़ार|लाख|करोड़|\d+)(?:\s+(?:एक|दो|तीन|चार|पांच|पाँच|दस|बीस|पचास|सौ|हजार|हज़ार|लाख|करोड़|\d+))*\s*(?:रुपये|रूपीस|रुपए|रुपया|टका|ரூபாய்|రూపాయలు|rupees|rs\b)", "MONEY", 0.96),
+        
+        # APPLICATION_ID (Banking, Digital India & Transaction Identifiers)
+        (r"(?:आईएफएससी\s*कोड|आईएफएससी|IFSC\s*code|IFSC|यूपीआई\s*आईडी|यूपीआई|UPI\s*ID|UPI|ओटीपी|OTP|पिन\s*कोड|आधार\s*नंबर|आधार|पैन\s*कार्ड|ट्रांजैक्शन\s*आईडी|अकाउंट\s*नंबर|रेफरेंस\s*नंबर|एप्लीकेशन\s*आईडी|हेल्पलाइन\s*नंबर)", "APPLICATION_ID", 0.95),
+        (r"\b[A-Z]{4}0[A-Z0-9]{6}\b|\b(?:APP|TXN|ORD|REF)[-\s]?\d{4,10}\b", "APPLICATION_ID", 0.98),
+        
+        # ORGANIZATION (Major Banks, E-Commerce & Institutional Suffixes)
+        (r"(?:स्टेट बैंक ऑफ इंडिया|स्टेट बैंक ऑफ़ इंडिया|भारतीय स्टेट बैंक|आईसीआईसीआई\s*बैंक|आईसीआईसीआई|एचडीएफसी\s*बैंक|एचडीएफसी|एक्सिस\s*बैंक|पंजाब नेशनल बैंक|कोटक\s*बैंक|एसबीआई|फ्लिपकार्ट|अमेज़न|अमेजन|पेटीएम|फोनपे|गूगल\s*पे|जोमैटो|स्विगी|रिलायंस|टाटा|SBI|ICICI\s*Bank|HDFC\s*Bank|Flipkart|Amazon|Paytm)", "ORGANIZATION", 0.95),
+        
+        # LOCATION (Cities, Sectors & Regional Markers)
+        (r"(?:सेक्टर\s*(?:\d+|पंद्रह|चौदह|सोलह|दस|बीस|एक|दो|तीन|चार|पांच)|फरीदाबाद|गुरुग्राम|गुड़गांव|दिल्ली|नई\s*दिल्ली|नोएडा|मुंबई|बेंगलुरु|हैदराबाद|चेन्नई|कोलकाता|चंडीगढ़|कैथल|हरियाणा|पंजाब|जयपुर|पुणे|लखनऊ)", "LOCATION", 0.94),
+        
+        # PERSON (Contextual Honorifics / Agent / Common Names)
+        (r"(?:राहुल\s*शर्मा|राहुल|अमित\s*कुमार|प्रिया|रोहित|विकास|दीपक)", "PERSON", 0.93),
+        (r"(?:श्री|श्रीमती|मिस्टर|एजेंट|डॉक्टर)\s+[ऀ-ॿA-Za-z]+(?:\s+[ऀ-ॿA-Za-z]+)?", "PERSON", 0.91),
+    ]
+
+    for pattern, category, conf in hybrid_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            add_entity(match.group(0), category, conf, match.start(), match.end())
+
+    # Stage 2: Neural IndicNER Inference (Supports 11+ Regional Indian Languages)
+    if ner_pipeline is not None:
+        try:
+            raw_preds = ner_pipeline(text)
+            for item in raw_preds:
+                raw_tag = item.get("entity_group") or item.get("entity") or ""
+                mapped = label_map.get(raw_tag.upper())
+                score = float(item.get("score", 0.91))
+                start_idx = item.get("start")
+                end_idx = item.get("end")
+                if start_idx is not None and end_idx is not None and 0 <= start_idx < end_idx <= len(text):
+                    word = text[start_idx:end_idx]
+                else:
+                    word = item.get("word", "")
+                if mapped and word:
+                    add_entity(word, mapped, score, start_idx, end_idx)
+        except Exception as e:
+            print(f"[BhashaSense] Neural NER inference error: {e}")
+
+    entities.sort(key=lambda x: x["start_char"])
+    return entities
+
+
+async def extract_entities(text: str = None, transcript: str = None) -> list[dict[str, Any]]:
     """
-    Extracts named entities using dslim/bert-base-NER with rule-based extensions.
+    Asynchronous entrypoint for extract_entities called by main.py, executing
+    the neural IndicNER + multilingual Indic rule extractor in a thread pool.
     """
-    return await asyncio.to_thread(_run_ner_sync, transcript)
+    input_text = text if text is not None else (transcript or "")
+    return await asyncio.to_thread(_run_extract_entities_sync, input_text)

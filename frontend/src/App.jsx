@@ -444,7 +444,29 @@ export default function App() {
       return <span>{transcriptText}</span>
     }
 
-    const sorted = [...entitiesList].sort((a, b) => a.start_char - b.start_char)
+    const enriched = entitiesList.map((ent) => {
+      const entityText = ent.text || ent.word || ent.entity || ''
+      const start = typeof ent.start_char === 'number' && !isNaN(ent.start_char) && ent.start_char >= 0
+        ? ent.start_char
+        : transcriptText.indexOf(entityText)
+      const end = typeof ent.end_char === 'number' && !isNaN(ent.end_char) && ent.end_char > start
+        ? ent.end_char
+        : (start >= 0 ? start + entityText.length : -1)
+      const cat = ent.type || ent.label || ent.entity_group || ent.category || ''
+      return {
+        ...ent,
+        start_char: start,
+        end_char: end,
+        category: cat,
+        displayText: entityText,
+      }
+    }).filter(e => e.start_char >= 0 && e.end_char > e.start_char)
+
+    if (enriched.length === 0) {
+      return <span>{transcriptText}</span>
+    }
+
+    const sorted = [...enriched].sort((a, b) => a.start_char - b.start_char)
     const elements = []
     let cursor = 0
 
@@ -457,16 +479,19 @@ export default function App() {
         )
       }
 
-      const badgeStyle = getEntityBadgeStyle(ent.label)
+      const badgeStyle = getEntityBadgeStyle(ent.category)
+      const conf = ent.confidence !== undefined
+        ? (ent.confidence <= 1.0 ? Math.round(ent.confidence * 100) : Math.round(ent.confidence))
+        : 95
       elements.push(
         <mark
           key={`ent-${index}`}
           className={`inline-flex items-center gap-1 mx-1 px-2 py-0.5 rounded-md font-semibold text-xs border ${badgeStyle} bg-opacity-70`}
-          title={`${ent.label} (${Math.round(ent.confidence * 100)}% confidence)`}
+          title={`${ent.category} (${conf}% confidence)`}
         >
-          <span>{ent.entity}</span>
+          <span>{ent.displayText}</span>
           <span className="text-[10px] uppercase tracking-wider opacity-75 font-mono">
-            {ent.label}
+            {ent.category}
           </span>
         </mark>
       )
@@ -486,9 +511,14 @@ export default function App() {
   }
 
   // Filter entities
-  const filteredEntities = (result?.entity_extraction?.entities || []).filter((ent) => {
+  const allEntities = Array.isArray(result?.entity_extraction)
+    ? result.entity_extraction
+    : (result?.entity_extraction?.entities || [])
+
+  const filteredEntities = allEntities.filter((ent) => {
     if (selectedEntityCategory === 'ALL') return true
-    return ent.label.toUpperCase() === selectedEntityCategory.toUpperCase()
+    const cat = ent.type || ent.label || ent.entity_group || ent.category || ''
+    return cat.toUpperCase() === selectedEntityCategory.toUpperCase()
   })
 
   // Filter segments
@@ -1000,7 +1030,9 @@ export default function App() {
                   <div className="p-5 rounded-2xl bg-slate-950/80 border border-slate-800/80 text-slate-200 text-base leading-relaxed tracking-normal font-sans selection:bg-indigo-500/30 mb-6">
                     {renderHighlightedTranscript(
                       result.transcription?.transcript || '',
-                      result.entity_extraction?.entities || []
+                      Array.isArray(result.entity_extraction)
+                        ? result.entity_extraction
+                        : (result.entity_extraction?.entities || [])
                     )}
                   </div>
 
@@ -1084,7 +1116,12 @@ export default function App() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       {filteredEntities.map((ent, i) => {
-                        const badgeStyle = getEntityBadgeStyle(ent.label)
+                        const cat = ent.type || ent.label || ent.entity_group || ent.category || ''
+                        const badgeStyle = getEntityBadgeStyle(cat)
+                        const displayText = ent.text || ent.word || ent.entity || ''
+                        const displayConf = ent.confidence !== undefined
+                          ? (ent.confidence <= 1.0 ? Math.round(ent.confidence * 100) : Math.round(ent.confidence))
+                          : Math.round((ent.score || 0.9) * 100)
                         return (
                           <div
                             key={i}
@@ -1092,16 +1129,16 @@ export default function App() {
                           >
                             <div className="truncate pr-2">
                               <span className="text-sm font-semibold text-white block truncate">
-                                {ent.entity}
+                                {displayText}
                               </span>
                               <span className="text-[10px] text-slate-500">
-                                Confidence: {Math.round(ent.confidence * 100)}%
+                                Confidence: {displayConf}%
                               </span>
                             </div>
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 uppercase tracking-wider font-mono ${badgeStyle}`}
                             >
-                              {ent.label}
+                              {cat}
                             </span>
                           </div>
                         )
