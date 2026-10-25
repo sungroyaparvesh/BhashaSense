@@ -197,10 +197,10 @@ export default function App() {
     setIsLoading(true)
     setError(null)
     setResult(null)
-    setLoadingStage('Transcribing audio via OpenAI Whisper...')
+    setLoadingStage('Transcribing code-mixed audio via AI4Bharat IndicConformer...')
 
     const timer1 = setTimeout(() => {
-      setLoadingStage('Concurrently evaluating RoBERTa Sentiment & BERT NER...')
+      setLoadingStage('Concurrently evaluating IndicSentiment & IndicNER...')
     }, 450)
 
     try {
@@ -557,7 +557,7 @@ export default function App() {
           BhashaSense Dashboard
         </h1>
         <p className="mt-3 text-slate-400 text-base max-w-2xl mx-auto">
-          End-to-end speech transcription (Whisper), sentiment intelligence (RoBERTa), and named entity extraction (BERT NER).
+          End-to-end speech transcription (AI4Bharat IndicConformer), sentiment intelligence (IndicSentiment), and named entity extraction (IndicNER).
         </p>
       </header>
 
@@ -572,35 +572,37 @@ export default function App() {
               Audio Input Mode
             </h2>
 
-            <div className="flex items-center p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setActiveTab('record')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === 'record'
-                    ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Mic className="w-3.5 h-3.5" />
-                <span>Live Microphone</span>
-                {isRecording && (
-                  <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                )}
-              </button>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('record')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                    activeTab === 'record'
+                      ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5" />
+                  <span>Live Microphone</span>
+                  {isRecording && (
+                    <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                  )}
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('upload')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === 'upload'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <UploadCloud className="w-3.5 h-3.5" />
-                <span>Upload File</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('upload')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                    activeTab === 'upload'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Upload File</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -716,7 +718,7 @@ export default function App() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="audio/*,.wav,.mp3,.aac,.m4a,.ogg,.webm"
+                  accept="audio/*,video/*,.mp4,.wav,.mp3,.aac,.m4a,.ogg,.webm,.flac"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -746,7 +748,7 @@ export default function App() {
                       <span className="text-indigo-400 font-semibold underline">browse</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-1">
-                      Supports WAV, MP3, AAC, M4A, OGG, WEBM (Max 50MB)
+                      Supports MP4, WAV, MP3, AAC, M4A, OGG, WEBM (Max 50MB)
                     </p>
                   </div>
                 )}
@@ -1016,14 +1018,31 @@ export default function App() {
               {/* Transcript & Extracted Entities Panel */}
               <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl flex flex-col justify-between">
                 <div>
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                     <h3 className="text-sm font-semibold tracking-wide uppercase text-slate-300 flex items-center gap-2">
                       <FileAudio className="w-4 h-4 text-indigo-400" />
                       Speech Transcript & Entity Highlights
                     </h3>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      {result.transcription?.detected_language || 'Detected'}
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {(result.detected_languages || result.detected_language || result.transcription?.detected_languages || result.audio?.detected_languages) ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-sm flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          Detected Mix: {
+                            (() => {
+                              const raw = result.detected_languages || result.transcription?.detected_languages || result.audio?.detected_languages || result.detected_language || result.audio?.detected_language;
+                              if (Array.isArray(raw)) {
+                                return raw.join(' + ') + (raw.length > 1 ? ' (Code-Mixed)' : '');
+                              }
+                              return raw;
+                            })()
+                          }
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                          {result.transcription?.detected_language || 'Auto-Detected'}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Inline Highlighted Transcript */}
@@ -1156,7 +1175,7 @@ export default function App() {
                 {/* Reset Action */}
                 <div className="mt-8 pt-4 border-t border-slate-800 flex items-center justify-between text-xs">
                   <span className="text-slate-500">
-                    Engine: Whisper + RoBERTa + BERT NER
+                    Engine: Autonomous IndicConformer (Energy-Segmented Multi-Head) + IndicSentiment + IndicNER
                   </span>
                   <button
                     type="button"
